@@ -18,7 +18,7 @@ import (
 type cliCommand struct {
 	name        string
 	description string
-	callback    func(*config) error
+	callback    func(*config, []string) error
 }
 
 type config struct {
@@ -34,6 +34,14 @@ type locationAreaResponse struct {
 		Name string `json:"name"`
 		URL  string `json:"url"`
 	}
+}
+
+type ExploreResponse struct {
+	PokemonEncounters []struct {
+		Pokemon struct {
+			Name string `json:"name"`
+		} `json:"pokemon"`
+	} `json:"pokemon_encounters"`
 }
 
 var commands map[string]cliCommand
@@ -65,6 +73,11 @@ func main() {
 			description: "Explore the Pokemon world backward",
 			callback:    commandMapBack,
 		},
+		"explore": {
+			name:        "explore",
+			description: "Explore a specific location area",
+			callback:    commandExplore,
+		},
 	}
 
 	for {
@@ -93,7 +106,7 @@ func main() {
 			continue
 		}
 
-		if err := cmd.callback(cfg); err != nil {
+		if err := cmd.callback(cfg, words[1:]); err != nil {
 			fmt.Println("Error:", err)
 		}
 	}
@@ -112,13 +125,13 @@ func cleanInput(text string) ([]string, error) {
 	return parts, nil
 }
 
-func commandExit(cfg *config) error {
+func commandExit(cfg *config, _ []string) error {
 	fmt.Println("Closing Pokedex... Goodbye!")
 	os.Exit(0)
 	return nil
 }
 
-func commandHelp(cfg *config) error {
+func commandHelp(cfg *config, args []string) error {
 	fmt.Println("Welcome to the Pokedex!")
 	fmt.Printf("Usage: \n\n")
 	for _, cmd := range commands {
@@ -161,7 +174,7 @@ func fetchLocationAreas(url string) (*locationAreaResponse, error) {
 	return &data, nil
 }
 
-func commandMap(cfg *config) error {
+func commandMap(cfg *config, args []string) error {
 	url := "https://pokeapi.co/api/v2/location-area?limit=20"
 	if cfg.next != nil {
 		url = *cfg.next
@@ -182,7 +195,7 @@ func commandMap(cfg *config) error {
 	return nil
 }
 
-func commandMapBack(cfg *config) error {
+func commandMapBack(cfg *config, args []string) error {
 	if cfg.previous == nil {
 		fmt.Println("You're on the first page")
 		return nil
@@ -200,5 +213,50 @@ func commandMapBack(cfg *config) error {
 	cfg.next = data.Next
 	cfg.previous = data.Previous
 
+	return nil
+}
+
+func commandExplore(cfg *config, args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: explore <location-area>")
+	}
+	areaName := args[0]
+
+	url := fmt.Sprintf("https://pokeapi.co/api/v2/location-area/%s", areaName)
+
+	// First check cache
+	if data, ok := pokeCache.Get(url); ok {
+		return printExplore(areaName, data)
+	}
+
+	// Otherwise, fetch from API
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	// Save in cache
+	pokeCache.Add(url, body)
+
+	return printExplore(areaName, body)
+}
+
+func printExplore(areaName string, body []byte) error {
+	var explore ExploreResponse
+	if err := json.Unmarshal(body, &explore); err != nil {
+		return err
+	}
+
+	fmt.Printf("Exploring %s...\n", areaName)
+	fmt.Println("Found Pokemon:")
+	for _, encounter := range explore.PokemonEncounters {
+		fmt.Printf(" - %s\n", encounter.Pokemon.Name)
+	}
 	return nil
 }
